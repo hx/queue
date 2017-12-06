@@ -3,6 +3,7 @@ package queue_test
 import (
 	"github.com/hx/queue"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -125,16 +126,24 @@ func TestQueue_OnPanic(t *testing.T) {
 }
 
 func TestQueue_Exclusive(t *testing.T) {
-	seq := ""
-	job := &queue.Job{
-		Key: "stuff",
-		Perform: func() {
-			seq += "a"
-			time.Sleep(20 * time.Millisecond)
-			seq += "z"
-		},
-	}
-	q := queue.NewQueue().Work(3)
+	var (
+		seq  = ""
+		lock = sync.Mutex{}
+		q    = queue.NewQueue().Work(3)
+		add  = func(s string) {
+			lock.Lock()
+			seq += s
+			lock.Unlock()
+		}
+		job = &queue.Job{
+			Key: "stuff",
+			Perform: func() {
+				add("a")
+				time.Sleep(20 * time.Millisecond)
+				add("z")
+			},
+		}
+	)
 	q.Add(job)
 	time.Sleep(10 * time.Millisecond)
 	q.Add(job).WaitAll()
