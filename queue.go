@@ -15,7 +15,7 @@ type Queue struct {
 	OnPanic func(*Job, interface{})
 
 	waiting *jobHeap
-	running map[string]bool
+	running map[string]int
 	inbox   chan *Job
 	outbox  chan *Job
 	manage  sync.Mutex
@@ -140,7 +140,7 @@ func (q *Queue) initialise() {
 	defer q.manage.Unlock()
 	if q.workers == nil {
 		q.waiting = &jobHeap{}
-		q.running = make(map[string]bool)
+		q.running = make(map[string]int)
 		q.workers = []chan struct{}{}
 		q.inbox = make(chan *Job, 100)
 		q.outbox = make(chan *Job, 100)
@@ -183,7 +183,7 @@ func (q *Queue) next() *time.Time {
 		if job.runAt.After(now) {
 			return job.runAt
 		}
-		if job.Simultaneous || !q.running[job.Key] {
+		if job.Simultaneous || q.running[job.Key] == 0 {
 			if runningKeys == nil {
 				keys := make([]string, 0, len(q.running))
 				for k := range q.running {
@@ -200,7 +200,7 @@ func (q *Queue) next() *time.Time {
 				q.waiting.remove(job)
 				q.active.Add(1)
 				q.wait.Done()
-				q.running[job.Key] = true
+				q.running[job.Key] += 1
 				q.outbox <- job
 			}
 		}
@@ -220,7 +220,11 @@ func (q *Queue) perform(job *Job) {
 
 func (q *Queue) complete(job *Job) {
 	q.enqueue.Lock()
-	delete(q.running, job.Key)
+	if count := q.running[job.Key] - 1; count == 0 {
+		delete(q.running, job.Key)
+	} else {
+		q.running[job.Key] = count
+	}
 	q.enqueue.Unlock()
 	q.active.Done()
 	q.manage.Lock()
