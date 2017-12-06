@@ -206,14 +206,14 @@ func (q *Queue) complete(job *Job) {
 	delete(q.running, job.Key)
 	q.enqueue.Unlock()
 	q.active.Done()
-	if job.Repeat > 0 {
-		q.manage.Lock()
-		defer q.manage.Unlock()
-		if len(q.workers) > 0 {
+	q.manage.Lock()
+	defer q.manage.Unlock()
+	if len(q.workers) > 0 {
+		if job.Repeat > 0 {
 			job.Delay = job.Repeat
 			q.Add(job)
-			return
+		} else {
+			q.seeker <- struct{}{}
 		}
 	}
-	q.seeker <- struct{}{}
 }
