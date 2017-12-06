@@ -10,6 +10,7 @@ Available behaviours:
 - Debounce jobs
 - Prevent jobs from running simultaneously
 - Prevent conflicts between different jobs
+- Cancel jobs that haven't run yet
 - Run jobs inline
 
 ### Example

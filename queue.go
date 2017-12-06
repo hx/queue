@@ -126,6 +126,18 @@ func (q *Queue) Add(job *Job) *Queue {
 	return q
 }
 
+// Remove jobs from the queue. Does not remove running jobs. Returns the number of jobs removed.
+func (q *Queue) Remove(keys ...string) (count uint) {
+	q.enqueue.Lock()
+	defer q.enqueue.Unlock()
+	for _, key := range keys {
+		if q.waiting.remove(key) {
+			count++
+		}
+	}
+	return
+}
+
 // Add an anonymous function to the queue, to be performed immediately.
 func (q *Queue) AddFunc(key string, f func()) *Queue {
 	return q.Add(&Job{Perform: f, Key: key})
@@ -189,11 +201,11 @@ func (q *Queue) next() *time.Time {
 			}
 			if job.hasConflict(runningKeys) {
 				if job.DiscardOnConflict {
-					q.waiting.remove(job)
+					q.waiting.remove(job.Key)
 				}
 			} else {
 				q.active.Add(1)
-				q.waiting.remove(job)
+				q.waiting.remove(job.Key)
 				q.running[job.Key] += 1
 				q.outbox <- job
 			}

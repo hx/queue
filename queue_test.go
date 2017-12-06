@@ -176,3 +176,13 @@ func TestQueue_Conflicts(t *testing.T) {
 	}).WaitAll()
 	Equal(t, 10, count)
 }
+
+func TestQueue_Remove(t *testing.T) {
+	q := queue.NewQueue().Add(&queue.Job{
+		Key:     "fail",
+		Delay:   50 * time.Millisecond,
+		Perform: func() { t.FailNow() },
+	})
+	Equal(t, uint(1), q.Remove("fail"))
+	q.WaitAll()
+}

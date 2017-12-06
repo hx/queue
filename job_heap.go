@@ -10,7 +10,7 @@ type jobHeap struct {
 
 func (h *jobHeap) add(j *Job) {
 	h.wg.Add(1)
-	h.remove(j)
+	h.remove(j.Key)
 	index := 0
 	for index < len(h.jobs) && h.jobs[index].runAt.Before(*j.runAt) {
 		index++
@@ -21,18 +21,20 @@ func (h *jobHeap) add(j *Job) {
 	}
 }
 
-func (h *jobHeap) remove(j *Job) {
+func (h *jobHeap) remove(key string) bool {
 	if h.keys == nil {
 		h.keys = make(map[string]int)
 	}
-	if index, ok := h.keys[j.Key]; ok {
+	if index, ok := h.keys[key]; ok {
 		h.jobs = append(h.jobs[:index], h.jobs[index+1:]...)
-		delete(h.keys, j.Key)
+		delete(h.keys, key)
 		for i := index; i < len(h.jobs); i++ {
 			h.keys[h.jobs[i].Key] = i
 		}
 		h.wg.Done()
+		return true
 	}
+	return false
 }
 
 func (h *jobHeap) wait() {
