@@ -9,6 +9,7 @@ Available behaviours:
 - Repeat (loop) jobs after a delay
 - Debounce jobs
 - Prevent jobs from running simultaneously
+- Prevent conflicts between different jobs
 - Run jobs inline
 
 ### Example
