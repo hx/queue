@@ -23,7 +23,6 @@ type Queue struct {
 	workers []chan struct{}
 	seeker  chan struct{}
 	active  sync.WaitGroup
-	wait    sync.WaitGroup
 	autoKey uint64
 }
 
@@ -91,7 +90,7 @@ func (q *Queue) Wait() *Queue {
 
 // Wait for all jobs to complete, including delayed jobs.
 func (q *Queue) WaitAll() *Queue {
-	q.wait.Wait()
+	q.waiting.wait()
 	return q.Wait()
 }
 
@@ -119,9 +118,6 @@ func (q *Queue) Add(job *Job) *Queue {
 		if job.Key == "" {
 			q.autoKey++
 			job.Key = "__anonymous__job__" + strconv.FormatUint(q.autoKey, 16)
-		}
-		if !q.waiting.has(job) {
-			q.wait.Add(1)
 		}
 		q.waiting.add(job)
 		q.enqueue.Unlock()
@@ -194,12 +190,10 @@ func (q *Queue) next() *time.Time {
 			if job.hasConflict(runningKeys) {
 				if job.DiscardOnConflict {
 					q.waiting.remove(job)
-					q.wait.Done()
 				}
 			} else {
-				q.waiting.remove(job)
 				q.active.Add(1)
-				q.wait.Done()
+				q.waiting.remove(job)
 				q.running[job.Key] += 1
 				q.outbox <- job
 			}

@@ -1,11 +1,15 @@
 package queue
 
+import "sync"
+
 type jobHeap struct {
 	jobs []*Job
 	keys map[string]int
+	wg   sync.WaitGroup
 }
 
 func (h *jobHeap) add(j *Job) {
+	h.wg.Add(1)
 	h.remove(j)
 	index := 0
 	for index < len(h.jobs) && h.jobs[index].runAt.Before(*j.runAt) {
@@ -27,10 +31,10 @@ func (h *jobHeap) remove(j *Job) {
 		for i := index; i < len(h.jobs); i++ {
 			h.keys[h.jobs[i].Key] = i
 		}
+		h.wg.Done()
 	}
 }
 
-func (h *jobHeap) has(j *Job) bool {
-	_, ok := h.keys[j.Key]
-	return ok
+func (h *jobHeap) wait() {
+	h.wg.Wait()
 }
