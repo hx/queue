@@ -131,8 +131,8 @@ func (q *Queue) Add(job *Job) *Queue {
 }
 
 // Add an anonymous function to the queue, to be performed immediately.
-func (q *Queue) AddFunc(f func()) *Queue {
-	return q.Add(&Job{Perform: f})
+func (q *Queue) AddFunc(key string, f func()) *Queue {
+	return q.Add(&Job{Perform: f, Key: key})
 }
 
 func (q *Queue) initialise() {

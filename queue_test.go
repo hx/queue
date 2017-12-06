@@ -36,7 +36,7 @@ func TestQueue_Add(t *testing.T) {
 	run := false
 	(&queue.Queue{}).
 		Work(1).
-		AddFunc(func() { run = true }).
+		AddFunc("", func() { run = true }).
 		WaitAll()
 	Assert(t, run, "Job should have run")
 }
@@ -119,7 +119,7 @@ func TestQueue_OnPanic(t *testing.T) {
 		},
 	}).
 		Work(1).
-		AddFunc(func() { panic("abc") }).
+		AddFunc("", func() { panic("abc") }).
 		WaitAll()
 	Equal(t, "abc", caught)
 }
@@ -156,7 +156,7 @@ func TestQueue_Conflicts(t *testing.T) {
 	Equal(t, 0, count)
 
 	count = 0
-	q.AddFunc(func() {
+	q.AddFunc("", func() {
 		time.Sleep(50 * time.Millisecond)
 		count = 5
 	})
