@@ -14,7 +14,7 @@ type Queue struct {
 	// Function to be called when a job panics. Ignored on inline queues. If absent, panicking jobs will fail silently.
 	OnPanic func(*Job, interface{})
 
-	waiting map[string]*Job
+	waiting *jobHeap
 	running map[string]bool
 	inbox   chan *Job
 	outbox  chan *Job
@@ -120,10 +120,10 @@ func (q *Queue) Add(job *Job) *Queue {
 			q.autoKey++
 			job.Key = "__anonymous__job__" + strconv.FormatUint(q.autoKey, 16)
 		}
-		if _, ok := q.waiting[job.Key]; !ok {
+		if !q.waiting.has(job) {
 			q.wait.Add(1)
 		}
-		q.waiting[job.Key] = job
+		q.waiting.add(job)
 		q.enqueue.Unlock()
 		q.seeker <- struct{}{}
 	}
@@ -139,7 +139,7 @@ func (q *Queue) initialise() {
 	q.manage.Lock()
 	defer q.manage.Unlock()
 	if q.workers == nil {
-		q.waiting = make(map[string]*Job)
+		q.waiting = &jobHeap{}
 		q.running = make(map[string]bool)
 		q.workers = []chan struct{}{}
 		q.inbox = make(chan *Job, 100)
@@ -171,17 +171,19 @@ func (q *Queue) seek() {
 	}()
 }
 
-func (q *Queue) next() (t *time.Time) {
+func (q *Queue) next() *time.Time {
 	now := time.Now()
 	q.enqueue.Lock()
 	defer q.enqueue.Unlock()
 	var runningKeys *[]string
-	for _, job := range q.waiting {
+	for _, job := range q.waiting.jobs {
+		if job == nil {
+			return nil
+		}
 		if job.runAt.After(now) {
-			if t == nil || job.runAt.Before(*t) {
-				t = job.runAt
-			}
-		} else if job.Simultaneous || !q.running[job.Key] {
+			return job.runAt
+		}
+		if job.Simultaneous || !q.running[job.Key] {
 			if runningKeys == nil {
 				keys := make([]string, 0, len(q.running))
 				for k := range q.running {
@@ -191,11 +193,11 @@ func (q *Queue) next() (t *time.Time) {
 			}
 			if job.hasConflict(runningKeys) {
 				if job.DiscardOnConflict {
-					delete(q.waiting, job.Key)
+					q.waiting.remove(job)
 					q.wait.Done()
 				}
 			} else {
-				delete(q.waiting, job.Key)
+				q.waiting.remove(job)
 				q.active.Add(1)
 				q.wait.Done()
 				q.running[job.Key] = true
@@ -203,7 +205,7 @@ func (q *Queue) next() (t *time.Time) {
 			}
 		}
 	}
-	return
+	return nil
 }
 
 func (q *Queue) perform(job *Job) {
