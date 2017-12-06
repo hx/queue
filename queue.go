@@ -175,17 +175,32 @@ func (q *Queue) next() (t *time.Time) {
 	now := time.Now()
 	q.enqueue.Lock()
 	defer q.enqueue.Unlock()
+	var runningKeys *[]string
 	for _, job := range q.waiting {
 		if job.runAt.After(now) {
 			if t == nil || job.runAt.Before(*t) {
 				t = job.runAt
 			}
 		} else if job.Simultaneous || !q.running[job.Key] {
-			delete(q.waiting, job.Key)
-			q.active.Add(1)
-			q.wait.Done()
-			q.running[job.Key] = true
-			q.outbox <- job
+			if runningKeys == nil {
+				keys := make([]string, 0, len(q.running))
+				for k := range q.running {
+					keys = append(keys, k)
+				}
+				runningKeys = &keys
+			}
+			if job.hasConflict(runningKeys) {
+				if job.DiscardOnConflict {
+					delete(q.waiting, job.Key)
+					q.wait.Done()
+				}
+			} else {
+				delete(q.waiting, job.Key)
+				q.active.Add(1)
+				q.wait.Done()
+				q.running[job.Key] = true
+				q.outbox <- job
+			}
 		}
 	}
 	return

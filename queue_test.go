@@ -144,3 +144,26 @@ func TestQueue_Exclusive(t *testing.T) {
 	q.Add(job).WaitAll()
 	Equal(t, "azazaazz", seq)
 }
+
+func TestQueue_Conflicts(t *testing.T) {
+	q := queue.NewQueue().Work(3)
+	count := 0
+	q.Add(&queue.Job{
+		IsConflict:        func(_ []string) bool { return true },
+		DiscardOnConflict: true,
+		Perform:           func() { count++ },
+	}).WaitAll()
+	Equal(t, 0, count)
+
+	count = 0
+	q.AddFunc(func() {
+		time.Sleep(50 * time.Millisecond)
+		count = 5
+	})
+	time.Sleep(20 * time.Millisecond)
+	q.Add(&queue.Job{
+		IsConflict: func(k []string) bool { return len(k) > 0 },
+		Perform:    func() { count *= 2 },
+	}).WaitAll()
+	Equal(t, 10, count)
+}
