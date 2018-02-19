@@ -21,10 +21,10 @@ type Job struct {
 
 	// Optional function that, given a list of keys of running jobs, returns true if there is a conflict with another job.
 	// Test is performed when job is about to run, not when it is queued.
-	IsConflict func([]string) bool
+	HasConflict func([]string) bool
 
 	// When false, job will wait for conflicts to be resolved. When true, job will be discarded immediately on conflict.
-	// Ignored if no IsConflict function is set.
+	// Ignored if no HasConflict function is set.
 	DiscardOnConflict bool
 
 	runAt *time.Time
@@ -36,8 +36,8 @@ func (j *Job) AddTo(q *Queue) {
 }
 
 func (j *Job) hasConflict(runningKeys *[]string) bool {
-	if j.IsConflict == nil {
+	if j.HasConflict == nil {
 		return false
 	}
-	return j.IsConflict(*runningKeys)
+	return j.HasConflict(*runningKeys)
 }
