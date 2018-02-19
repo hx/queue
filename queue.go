@@ -190,7 +190,7 @@ func (q *Queue) next() *time.Time {
 	now := time.Now()
 	q.enqueue.Lock()
 	defer q.enqueue.Unlock()
-	var runningKeys *[]string
+	var runningKeys []string
 	for _, job := range q.waiting.jobs {
 		if job == nil {
 			return nil
@@ -200,11 +200,10 @@ func (q *Queue) next() *time.Time {
 		}
 		if job.Simultaneous || q.running[job.Key] == 0 {
 			if runningKeys == nil {
-				keys := make([]string, 0, len(q.running))
+				runningKeys = make([]string, 0, len(q.running))
 				for k := range q.running {
-					keys = append(keys, k)
+					runningKeys = append(runningKeys, k)
 				}
-				runningKeys = &keys
 			}
 			if job.hasConflict(runningKeys) {
 				if job.DiscardOnConflict {

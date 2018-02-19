@@ -158,7 +158,7 @@ func TestQueue_Conflicts(t *testing.T) {
 	q := queue.NewQueue().Work(3)
 	count := 0
 	q.Add(&queue.Job{
-		HasConflict:       func(_ []string) bool { return true },
+		HasConflicts:      func(_ []string) bool { return true },
 		DiscardOnConflict: true,
 		Perform:           func() { count++ },
 	}).WaitAll()
@@ -171,10 +171,37 @@ func TestQueue_Conflicts(t *testing.T) {
 	})
 	time.Sleep(20 * time.Millisecond)
 	q.Add(&queue.Job{
-		HasConflict: func(k []string) bool { return len(k) > 0 },
-		Perform:     func() { count *= 2 },
+		HasConflicts: func(k []string) bool { return len(k) > 0 },
+		Perform:      func() { count *= 2 },
 	}).WaitAll()
 	Equal(t, 10, count)
+}
+
+func TestQueue_Conflict(t *testing.T) {
+	var (
+		count  = 0
+		tested []string
+	)
+	queue.
+		NewQueue().
+		Add(&queue.Job{
+			Key: "thorn",
+			Perform: func() {
+				time.Sleep(50 * time.Millisecond)
+				count += 1
+			},
+		}).
+		Add(&queue.Job{
+			Delay: 20 * time.Millisecond,
+			HasConflict: func(key string) bool {
+				tested = append(tested, key)
+				return true
+			},
+			Perform:           func() { count += 1 },
+			DiscardOnConflict: true,
+		}).WaitAll()
+	Equal(t, []string{"thorn"}, tested)
+	Equal(t, 1, count)
 }
 
 func TestQueue_Remove(t *testing.T) {
