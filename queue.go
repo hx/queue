@@ -119,6 +119,13 @@ func (q *Queue) Add(job *Job) *Queue {
 			q.autoKey++
 			job.Key = "__anonymous__job__" + strconv.FormatUint(q.autoKey, 16)
 		}
+		if job.CanReplace != nil {
+			for key := range q.waiting.keys {
+				if job.CanReplace(key) {
+					q.waiting.remove(key)
+				}
+			}
+		}
 		q.waiting.add(job)
 		q.enqueue.Unlock()
 		q.seeker <- struct{}{}

@@ -27,6 +27,10 @@ type Job struct {
 	// Ignored if no HasConflict function is set.
 	DiscardOnConflict bool
 
+	// Optional function that, given the key of another queued job, returns true if this job can take the other job's
+	// place. Can be used, for example, to replace a queued sync-one job with a sync-all job.
+	CanReplace func(string) bool
+
 	runAt *time.Time
 }
 

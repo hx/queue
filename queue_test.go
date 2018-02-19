@@ -186,3 +186,36 @@ func TestQueue_Remove(t *testing.T) {
 	Equal(t, uint(1), q.Remove("fail"))
 	q.WaitAll()
 }
+
+func TestQueue_CanReplace(t *testing.T) {
+	var (
+		seq  = ""
+		lock = sync.Mutex{}
+		add  = func(s string) {
+			lock.Lock()
+			seq += s
+			lock.Unlock()
+		}
+	)
+	queue.
+		NewQueue().
+		Work(3).
+		Add(&queue.Job{
+			Key:     "a",
+			Delay:   10 * time.Millisecond,
+			Perform: func() { add("a") },
+		}).
+		Add(&queue.Job{
+			Key:     "b",
+			Delay:   20 * time.Millisecond,
+			Perform: func() { add("b") },
+		}).
+		Add(&queue.Job{
+			Key:        "c",
+			Delay:      10 * time.Millisecond,
+			Perform:    func() { add("c") },
+			CanReplace: func(key string) bool { return key == "a" },
+		}).
+		WaitAll()
+	Equal(t, "cb", seq)
+}
