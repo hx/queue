@@ -53,7 +53,7 @@ func (q *Queue) Work(workers int) *Queue {
 			for {
 				select {
 				case job := <-q.outbox:
-					q.perform(job)
+					q.perform(job, false)
 				case <-cancel:
 					break
 				}
@@ -106,13 +106,15 @@ func (q *Queue) Shutdown() *Queue {
 
 // Add a job to the queue.
 func (q *Queue) Add(job *Job) *Queue {
+	q.initialise()
+	return q.add(job)
+}
+
+func (q *Queue) add(job *Job) *Queue {
 	runAt := time.Now().Add(job.Delay)
 	if q.Inline {
 		job.Perform()
 	} else {
-		if q.workers == nil || len(q.workers) == 0 { // TODO fix races
-			panic("queue has no workers")
-		}
 		q.enqueue.Lock()
 		job.runAt = &runAt
 		if job.Key == "" {
@@ -128,7 +130,9 @@ func (q *Queue) Add(job *Job) *Queue {
 		}
 		q.waiting.add(job)
 		q.enqueue.Unlock()
-		q.seeker <- struct{}{}
+		if len(q.workers) > 0 {
+			q.seeker <- struct{}{}
+		}
 	}
 	return q
 }
@@ -145,9 +149,59 @@ func (q *Queue) Remove(keys ...string) (count uint) {
 	return
 }
 
+// Clear the queue, and return the jobs that were cancelled. Does not affect running jobs.
+func (q *Queue) Clear() (jobs []*Job) {
+	q.enqueue.Lock()
+	defer q.enqueue.Unlock()
+	jobs = q.waiting.jobs
+	for _, job := range jobs {
+		q.waiting.remove(job.Key)
+	}
+	return
+}
+
 // Add an anonymous function to the queue, to be performed immediately.
 func (q *Queue) AddFunc(key string, f func()) *Queue {
 	return q.Add(&Job{Perform: f, Key: key})
+}
+
+// Force the next job in the queue to be performed synchronously, and return the job. Nil will be returned if no job is
+// waiting. No jobs can be queued until the forced job completes. Repeat jobs will not be re-queued.
+//
+// This method is intended for testing your Queue consumption.
+func (q *Queue) Force() (job *Job) {
+	q.enqueue.Lock()
+	defer q.enqueue.Unlock()
+	if len(q.waiting.jobs) > 0 {
+		job = q.waiting.jobs[0]
+		q.perform(job, true)
+		q.waiting.remove(job.Key)
+	}
+	return
+}
+
+// Force all jobs in the queue to be performed, in sequence, and return the performed jobs in the order they were run.
+// No jobs can be queued until all jobs complete. Repeat jobs will not be re-queued.
+//
+// This method is intended for testing your Queue consumption.
+func (q *Queue) Drain() (jobs []*Job) {
+	q.enqueue.Lock()
+	defer q.enqueue.Unlock()
+	jobs = q.waiting.jobs
+	for _, job := range jobs {
+		q.perform(job, true)
+		q.waiting.remove(job.Key)
+	}
+	return
+}
+
+// Get a list of all queued jobs, in the order they are due to be performed (not considering conflicts).
+//
+// This method is intended for testing your Queue consumption.
+func (q *Queue) Waiting() []*Job {
+	q.enqueue.Lock()
+	defer q.enqueue.Unlock()
+	return q.waiting.jobs
 }
 
 func (q *Queue) initialise() {
@@ -220,12 +274,14 @@ func (q *Queue) next() *time.Time {
 	return nil
 }
 
-func (q *Queue) perform(job *Job) {
+func (q *Queue) perform(job *Job, forced bool) {
 	defer func() {
 		if err := recover(); err != nil && q.OnPanic != nil {
 			q.OnPanic(job, err)
 		}
-		go q.complete(job)
+		if !forced {
+			go q.complete(job)
+		}
 	}()
 	job.Perform()
 }
@@ -244,7 +300,7 @@ func (q *Queue) complete(job *Job) {
 	if len(q.workers) > 0 {
 		if job.Repeat > 0 {
 			job.Delay = job.Repeat
-			q.Add(job)
+			q.add(job)
 		} else {
 			q.seeker <- struct{}{}
 		}

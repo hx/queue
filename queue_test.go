@@ -246,3 +246,59 @@ func TestQueue_CanReplace(t *testing.T) {
 		WaitAll()
 	Equal(t, "cb", seq)
 }
+
+func TestQueue_Clear(t *testing.T) {
+	q := &queue.Queue{}
+	q.
+		AddFunc("foo", func() {}).
+		AddFunc("bar", func() {})
+	Equal(t, 2, len(q.Waiting()))
+	Equal(t, 2, len(q.Clear()))
+	Equal(t, 0, len(q.Waiting()))
+}
+
+func TestQueue_Force(t *testing.T) {
+	var (
+		run bool
+		q   = &queue.Queue{}
+	)
+	q.Add(&queue.Job{
+		Key:     "2",
+		Perform: func() { run = true },
+		Delay:   1 * time.Second,
+	}).Add(&queue.Job{
+		Key:     "1",
+		Perform: func() {},
+	})
+	Equal(t, 2, len(q.Waiting()))
+	Equal(t, "1", q.Force().Key)
+	Equal(t, 1, len(q.Waiting()))
+	Assert(t, !run, "")
+	Equal(t, "2", q.Force().Key)
+	Equal(t, 0, len(q.Waiting()))
+	Assert(t, run, "")
+}
+
+func TestQueue_Drain(t *testing.T) {
+	var (
+		count int
+		q     = &queue.Queue{}
+		inc   = func() { count += 1 }
+	)
+	q.AddFunc("a", inc).AddFunc("b", inc)
+	Equal(t, 2, len(q.Waiting()))
+	Equal(t, "b", q.Drain()[1].Key)
+	Equal(t, 0, len(q.Waiting()))
+	Equal(t, 2, count)
+}
+
+func TestQueue_Waiting(t *testing.T) {
+	var (
+		q = &queue.Queue{}
+		j = &queue.Job{Key: "123", Perform: func() {}}
+	)
+	q.Add(j)
+	Equal(t, []*queue.Job{j}, q.Waiting())
+	q.Drain()
+	Equal(t, []*queue.Job{}, q.Waiting())
+}
