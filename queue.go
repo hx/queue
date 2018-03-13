@@ -151,13 +151,7 @@ func (q *Queue) Remove(keys ...string) (count uint) {
 
 // Clear the queue, and return the jobs that were cancelled. Does not affect running jobs.
 func (q *Queue) Clear() (jobs []*Job) {
-	q.enqueue.Lock()
-	defer q.enqueue.Unlock()
-	jobs = q.waiting.jobs
-	for _, job := range jobs {
-		q.waiting.remove(job.Key)
-	}
-	return
+	return q.drain(false)
 }
 
 // Add an anonymous function to the queue, to be performed immediately.
@@ -171,11 +165,13 @@ func (q *Queue) AddFunc(key string, f func()) *Queue {
 // This method is intended for testing your Queue consumption.
 func (q *Queue) Force() (job *Job) {
 	q.enqueue.Lock()
-	defer q.enqueue.Unlock()
 	if len(q.waiting.jobs) > 0 {
 		job = q.waiting.jobs[0]
-		q.perform(job, true)
 		q.waiting.remove(job.Key)
+	}
+	q.enqueue.Unlock()
+	if job != nil {
+		q.perform(job, true)
 	}
 	return
 }
@@ -185,12 +181,21 @@ func (q *Queue) Force() (job *Job) {
 //
 // This method is intended for testing your Queue consumption.
 func (q *Queue) Drain() (jobs []*Job) {
+	return q.drain(true)
+}
+
+func (q *Queue) drain(perform bool) (jobs []*Job) {
 	q.enqueue.Lock()
-	defer q.enqueue.Unlock()
-	jobs = q.waiting.jobs
+	jobs = make([]*Job, len(q.waiting.jobs))
+	copy(jobs, q.waiting.jobs)
 	for _, job := range jobs {
-		q.perform(job, true)
 		q.waiting.remove(job.Key)
+	}
+	q.enqueue.Unlock()
+	if perform {
+		for _, job := range jobs {
+			q.perform(job, true)
+		}
 	}
 	return
 }

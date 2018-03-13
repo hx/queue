@@ -251,9 +251,10 @@ func TestQueue_Clear(t *testing.T) {
 	q := &queue.Queue{}
 	q.
 		AddFunc("foo", func() {}).
+		AddFunc("baz", func() {}).
 		AddFunc("bar", func() {})
-	Equal(t, 2, len(q.Waiting()))
-	Equal(t, 2, len(q.Clear()))
+	Equal(t, 3, len(q.Waiting()))
+	Equal(t, 3, len(q.Clear()))
 	Equal(t, 0, len(q.Waiting()))
 }
 
@@ -285,11 +286,11 @@ func TestQueue_Drain(t *testing.T) {
 		q     = &queue.Queue{}
 		inc   = func() { count += 1 }
 	)
-	q.AddFunc("a", inc).AddFunc("b", inc)
-	Equal(t, 2, len(q.Waiting()))
-	Equal(t, "b", q.Drain()[1].Key)
+	q.AddFunc("a", inc).AddFunc("b", inc).AddFunc("c", inc)
+	Equal(t, 3, len(q.Waiting()))
+	Equal(t, "c", q.Drain()[2].Key)
 	Equal(t, 0, len(q.Waiting()))
-	Equal(t, 2, count)
+	Equal(t, 3, count)
 }
 
 func TestQueue_Waiting(t *testing.T) {
@@ -301,4 +302,12 @@ func TestQueue_Waiting(t *testing.T) {
 	Equal(t, []*queue.Job{j}, q.Waiting())
 	q.Drain()
 	Equal(t, []*queue.Job{}, q.Waiting())
+}
+
+func TestQueue_ForcedJobQueuesAnotherJob(t *testing.T) {
+	q := &queue.Queue{}
+	q.AddFunc("outer", func() {
+		q.AddFunc("inner", func() {})
+	})
+	q.Force() // Should not deadlock
 }
