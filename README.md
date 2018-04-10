@@ -1,5 +1,7 @@
 # Queue
 
+[![GoDoc](https://godoc.org/github.com/hx/queue?status.svg)](https://godoc.org/github.com/hx/queue)
+
 Job queue for Go.
 
 Available behaviours:
