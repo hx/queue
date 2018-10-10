@@ -3,6 +3,7 @@ package queue
 import (
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -14,144 +15,103 @@ type Queue struct {
 	// Function to be called when a job panics. Ignored on inline queues. If absent, panicking jobs will fail silently.
 	OnPanic func(*Job, interface{})
 
+	sync    sync.Mutex
+	state   uint32
+	stream  chan chan func()
 	waiting *jobHeap
 	running map[string]int
-	inbox   chan *Job
-	outbox  chan *Job
-	manage  sync.Mutex
-	enqueue sync.Mutex
-	workers []chan struct{}
-	seeker  chan struct{}
 	active  sync.WaitGroup
 	autoKey uint64
 }
 
-// Return a new queue with one running worker.
+type state uint32
+
+const (
+	stateUnused state = iota
+	stateStarted
+	stateStopped
+	statePaused
+)
+
+// Deprecated: make a new queue. Use &Queue{} instead.
 func NewQueue() *Queue {
-	return (&Queue{}).Work(1)
+	return &Queue{}
 }
 
-// Set the number of workers processing a queue. If the given number is less than the current number of workers,
-// existing workers will be allowed to finish their current job before being terminated.
+// Deprecated: used to set number of workers. No-op.
 func (q *Queue) Work(workers int) *Queue {
-	q.initialise()
-	q.manage.Lock()
-	defer q.manage.Unlock()
-	if workers < 0 {
-		workers = len(q.workers) + workers
-	}
-	if workers < 0 {
-		workers = 0
-	}
-	for workers > len(q.workers) {
-		if len(q.workers) == 0 {
-			q.seek()
-		}
-		cancel := make(chan struct{}, 1) // Buffer allows jobs to cancel their own workers
-		q.workers = append(q.workers, cancel)
-		go func() {
-			for {
-				select {
-				case job := <-q.outbox:
-					q.perform(job, false)
-				case <-cancel:
-					break
-				}
-			}
-		}()
-	}
-	for workers < len(q.workers) {
-		cancel := q.workers[0]
-		q.workers = q.workers[1:]
-		cancel <- struct{}{}
-		if len(q.workers) == 0 {
-			close(q.seeker)
-		}
-	}
 	return q
-}
-
-// Get the number of running workers.
-func (q *Queue) Workers() int {
-	q.manage.Lock()
-	defer q.manage.Unlock()
-	if q.workers == nil {
-		return 0
-	} else {
-		return len(q.workers)
-	}
 }
 
 // Wait for running jobs to complete. Does not wait for delayed jobs.
 func (q *Queue) Wait() *Queue {
-	q.active.Wait()
+	if q.didStart() {
+		q.active.Wait()
+	}
 	return q
 }
 
 // Wait for all jobs to complete, including delayed jobs.
 func (q *Queue) WaitAll() *Queue {
-	q.waiting.wait()
+	if q.didStart() {
+		q.waiting.wait()
+	}
 	return q.Wait()
 }
 
-// Stop all running workers.
+// Deprecated: used to stop all running workers. No-op.
 func (q *Queue) StopAll() *Queue {
 	return q.Work(0)
 }
 
-// Wait for existing jobs to finish, and stop all workers.
+// Clear the queue, and wait for existing jobs to finish. Repeat jobs will not be repeated.
 func (q *Queue) Shutdown() *Queue {
-	return q.StopAll().Wait()
+	q.Clear()
+	q.interruptAndWait(func() {
+		q.setState(stateStopped)
+		q.waiting.clear()
+	})
+	return q.Wait()
 }
 
 // Add a job to the queue.
-func (q *Queue) Add(job *Job) *Queue {
-	q.initialise()
-	return q.add(job)
-}
-
-func (q *Queue) add(job *Job) *Queue {
-	runAt := time.Now().Add(job.Delay)
+func (q *Queue) Add(j *Job) *Queue {
 	if q.Inline {
-		job.Perform()
+		q.performInline(j)
 	} else {
-		q.enqueue.Lock()
-		job.runAt = &runAt
-		if job.Key == "" {
-			q.autoKey++
-			job.Key = "__anonymous__job__" + strconv.FormatUint(q.autoKey, 16)
-		}
-		if job.CanReplace != nil {
-			for key := range q.waiting.keys {
-				if job.CanReplace(key) {
-					q.waiting.remove(key)
-				}
-			}
-		}
-		q.waiting.add(job)
-		q.enqueue.Unlock()
-		if len(q.workers) > 0 {
-			q.seeker <- struct{}{}
-		}
+		q.interruptAndWait(func() { q.enqueue(j) })
 	}
 	return q
 }
 
 // Remove jobs from the queue. Does not remove running jobs. Returns the number of jobs removed.
 func (q *Queue) Remove(keys ...string) (count uint) {
-	q.enqueue.Lock()
-	defer q.enqueue.Unlock()
-	for _, key := range keys {
-		if q.waiting.remove(key) {
-			count++
+	q.interruptAndWait(func() {
+		for _, key := range keys {
+			if q.waiting.remove(key) {
+				count++
+			}
 		}
-	}
+	})
 	return
 }
 
 // Clear the queue, and return the jobs that were cancelled. Does not affect running jobs.
 func (q *Queue) Clear() (jobs []*Job) {
-	return q.drain(false)
+	q.interruptAndWait(func() { jobs = q.waiting.clear() })
+	return
+}
+
+// Pause queue processing. Does not affect running jobs.
+func (q *Queue) Pause() *Queue {
+	q.interruptAndWait(func() { q.setState(statePaused) })
+	return q
+}
+
+// Resume queue processing after having been Paused.
+func (q *Queue) Resume() *Queue {
+	q.interruptAndWait(func() { q.setState(stateStarted) })
+	return q
 }
 
 // Add an anonymous function to the queue, to be performed immediately.
@@ -160,19 +120,17 @@ func (q *Queue) AddFunc(key string, f func()) *Queue {
 }
 
 // Force the next job in the queue to be performed synchronously, and return the job. Nil will be returned if no job is
-// waiting. No jobs can be queued until the forced job completes. Repeat jobs will not be re-queued.
+// waiting. No jobs can be queued until the forced job completes. Repeat jobs will not be re-queued. OnPanic is ignored.
 //
 // This method is intended for testing your Queue consumption.
 func (q *Queue) Force() (job *Job) {
-	q.enqueue.Lock()
-	if len(q.waiting.jobs) > 0 {
-		job = q.waiting.jobs[0]
-		q.waiting.remove(job.Key)
-	}
-	q.enqueue.Unlock()
-	if job != nil {
-		q.perform(job, true)
-	}
+	q.interruptAndWait(func() {
+		if len(q.waiting.jobs) != 0 {
+			job = q.waiting.jobs[0]
+			q.waiting.remove(job.Key)
+			job.Perform()
+		}
+	})
 	return
 }
 
@@ -181,133 +139,189 @@ func (q *Queue) Force() (job *Job) {
 //
 // This method is intended for testing your Queue consumption.
 func (q *Queue) Drain() (jobs []*Job) {
-	return q.drain(true)
-}
-
-func (q *Queue) drain(perform bool) (jobs []*Job) {
-	q.enqueue.Lock()
-	jobs = make([]*Job, len(q.waiting.jobs))
-	copy(jobs, q.waiting.jobs)
-	for _, job := range jobs {
-		q.waiting.remove(job.Key)
-	}
-	q.enqueue.Unlock()
-	if perform {
-		for _, job := range jobs {
-			q.perform(job, true)
+	q.interruptAndWait(func() {
+		jobs = q.waiting.clear()
+		for _, j := range jobs {
+			j.Perform()
 		}
-	}
+	})
 	return
 }
 
 // Get a list of all queued jobs, in the order they are due to be performed (not considering conflicts).
 //
 // This method is intended for testing your Queue consumption.
-func (q *Queue) Waiting() []*Job {
-	q.enqueue.Lock()
-	defer q.enqueue.Unlock()
-	return q.waiting.jobs
+func (q *Queue) Waiting() (jobs []*Job) {
+	q.interruptAndWait(func() { jobs = q.waiting.jobs })
+	return
 }
 
-func (q *Queue) initialise() {
-	q.manage.Lock()
-	defer q.manage.Unlock()
-	if q.workers == nil {
-		q.waiting = &jobHeap{}
+func (q *Queue) getState() state {
+	s := state(atomic.LoadUint32(&q.state))
+	return s
+}
+
+func (q *Queue) setState(s state) {
+	atomic.StoreUint32(&q.state, uint32(s))
+}
+
+func (q *Queue) swapState(old, new state) bool {
+	return atomic.CompareAndSwapUint32(&q.state, uint32(old), uint32(new))
+}
+
+func (q *Queue) start() {
+	q.sync.Lock()
+	if q.swapState(stateUnused, stateStarted) {
+		q.stream = make(chan chan func())
+		q.waiting = new(jobHeap)
 		q.running = make(map[string]int)
-		q.workers = []chan struct{}{}
-		q.inbox = make(chan *Job, 100)
-		q.outbox = make(chan *Job, 100)
+		go q.run()
 	}
+	q.sync.Unlock()
 }
 
-func (q *Queue) seek() {
-	q.seeker = make(chan struct{})
-	go func() {
-		var schedule *time.Time
-		for {
-			now := time.Now()
-			open := true
-			if schedule != nil && schedule.After(now) {
-				select {
-				case _, open = <-q.seeker:
-				case <-time.After(schedule.Sub(now)):
-				}
-			} else {
-				_, open = <-q.seeker
-			}
-			schedule = q.next()
-			if !open {
-				break
-			}
-		}
-		q.seeker = nil
-	}()
+func (q *Queue) didStart() bool {
+	return q.getState() != stateUnused
 }
 
-func (q *Queue) next() *time.Time {
-	now := time.Now()
-	q.enqueue.Lock()
-	defer q.enqueue.Unlock()
-	var runningKeys []string
-	for _, job := range q.waiting.jobs {
-		if job == nil {
-			return nil
-		}
-		if job.runAt.After(now) {
-			return job.runAt
-		}
-		if job.Simultaneous || q.running[job.Key] == 0 {
-			if runningKeys == nil {
-				runningKeys = make([]string, 0, len(q.running))
-				for k := range q.running {
-					runningKeys = append(runningKeys, k)
+func (q *Queue) restart() (ret chan func()) {
+	q.sync.Lock()
+	ret, ok := <-q.stream
+	if !ok {
+		q.stream = make(chan chan func())
+		q.swapState(stateStopped, stateStarted)
+		go q.run()
+		ret = <-q.stream
+	}
+	q.sync.Unlock()
+	return
+}
+
+func (q *Queue) run() {
+	var (
+		interrupt = make(chan func())
+		firstRun  = true
+	)
+	for {
+		var (
+			now         = time.Now()
+			timeout     <-chan time.Time
+			runningKeys []string
+			unqueue     []*Job
+		)
+		if q.getState() != statePaused {
+			for _, job := range q.waiting.jobs {
+				if job.runAt.After(now) {
+					timeout = time.After(job.runAt.Sub(now))
+					break
+				}
+				if job.Simultaneous || q.running[job.Key] == 0 {
+					if runningKeys == nil {
+						runningKeys = make([]string, 0, len(q.running))
+						for jobKey := range q.running {
+							runningKeys = append(runningKeys, jobKey)
+						}
+					}
+					if job.hasConflict(runningKeys) {
+						if job.DiscardOnConflict {
+							unqueue = append(unqueue, job)
+						}
+					} else {
+						unqueue = append(unqueue, job)
+						q.running[job.Key]++
+						q.active.Add(1)
+						go q.perform(job)
+					}
 				}
 			}
-			if job.hasConflict(runningKeys) {
-				if job.DiscardOnConflict {
-					q.waiting.remove(job.Key)
-				}
-			} else {
-				q.active.Add(1)
+			for _, job := range unqueue {
 				q.waiting.remove(job.Key)
-				q.running[job.Key] += 1
-				q.outbox <- job
+			}
+		}
+		if !firstRun && timeout == nil && len(q.waiting.jobs) == 0 && len(q.running) == 0 {
+			close(q.stream)
+			return
+		}
+		firstRun = false
+		if timeout == nil {
+			q.stream <- interrupt
+			(<-interrupt)()
+		} else {
+			select {
+			case <-timeout:
+			case q.stream <- interrupt:
+				(<-interrupt)()
 			}
 		}
 	}
-	return nil
 }
 
-func (q *Queue) perform(job *Job, forced bool) {
+func (q *Queue) interrupt(fn func()) {
+	q.start()
+	ret, ok := <-q.stream
+	if !ok {
+		ret = q.restart()
+	}
+	ret <- fn
+}
+
+func (q *Queue) interruptAndWait(fn func()) {
+	lock := sync.Mutex{}
+	lock.Lock()
+	q.interrupt(func() {
+		fn()
+		lock.Unlock()
+	})
+	lock.Lock()
+}
+
+func (q *Queue) enqueue(j *Job) {
+	runAt := time.Now().Add(j.Delay)
+	j.runAt = &runAt
+	if j.Key == "" {
+		q.autoKey++
+		j.Key = "Anonymous job #" + strconv.FormatUint(q.autoKey, 10)
+	}
+	if j.CanReplace != nil {
+		var remove []string
+		for jobKey := range q.waiting.keys {
+			if j.CanReplace(jobKey) {
+				remove = append(remove, jobKey)
+			}
+		}
+		for _, jobKey := range remove {
+			q.waiting.remove(jobKey)
+		}
+	}
+	q.waiting.add(j)
+}
+
+func (q *Queue) perform(j *Job) {
 	defer func() {
 		if err := recover(); err != nil && q.OnPanic != nil {
-			q.OnPanic(job, err)
+			q.OnPanic(j, err)
 		}
-		if !forced {
-			go q.complete(job)
-		}
+		q.interrupt(func() {
+			if count := q.running[j.Key] - 1; count == 0 {
+				delete(q.running, j.Key)
+			} else {
+				q.running[j.Key] = count
+			}
+			if j.Repeat > 0 && q.getState() != stateStopped {
+				j.Delay = j.Repeat
+				q.enqueue(j)
+			}
+			q.active.Done()
+		})
 	}()
-	job.Perform()
+	j.Perform()
 }
 
-func (q *Queue) complete(job *Job) {
-	q.enqueue.Lock()
-	if count := q.running[job.Key] - 1; count == 0 {
-		delete(q.running, job.Key)
-	} else {
-		q.running[job.Key] = count
-	}
-	q.enqueue.Unlock()
-	q.active.Done()
-	q.manage.Lock()
-	defer q.manage.Unlock()
-	if len(q.workers) > 0 {
-		if job.Repeat > 0 {
-			job.Delay = job.Repeat
-			q.add(job)
-		} else {
-			q.seeker <- struct{}{}
+func (q *Queue) performInline(j *Job) {
+	defer func() {
+		if err := recover(); err != nil && q.OnPanic != nil {
+			q.OnPanic(j, err)
 		}
-	}
+	}()
+	j.Perform()
 }

@@ -248,7 +248,7 @@ func TestQueue_CanReplace(t *testing.T) {
 }
 
 func TestQueue_Clear(t *testing.T) {
-	q := &queue.Queue{}
+	q := (&queue.Queue{}).Pause()
 	q.
 		AddFunc("foo", func() {}).
 		AddFunc("baz", func() {}).
@@ -261,7 +261,7 @@ func TestQueue_Clear(t *testing.T) {
 func TestQueue_Force(t *testing.T) {
 	var (
 		run bool
-		q   = &queue.Queue{}
+		q   = (&queue.Queue{}).Pause()
 	)
 	q.Add(&queue.Job{
 		Key:     "2",
@@ -283,7 +283,7 @@ func TestQueue_Force(t *testing.T) {
 func TestQueue_Drain(t *testing.T) {
 	var (
 		count int
-		q     = &queue.Queue{}
+		q     = (&queue.Queue{}).Pause()
 		inc   = func() { count += 1 }
 	)
 	q.AddFunc("a", inc).AddFunc("b", inc).AddFunc("c", inc)
@@ -295,7 +295,7 @@ func TestQueue_Drain(t *testing.T) {
 
 func TestQueue_Waiting(t *testing.T) {
 	var (
-		q = &queue.Queue{}
+		q = (&queue.Queue{}).Pause()
 		j = &queue.Job{Key: "123", Perform: func() {}}
 	)
 	q.Add(j)
@@ -310,4 +310,17 @@ func TestQueue_ForcedJobQueuesAnotherJob(t *testing.T) {
 		q.AddFunc("inner", func() {})
 	})
 	q.Force() // Should not deadlock
+}
+
+func TestQueue_Resume(t *testing.T) {
+	var (
+		run bool
+		q   = (&queue.Queue{}).Pause()
+	)
+	q.AddFunc("run", func() { run = true })
+	time.Sleep(20 * time.Millisecond)
+	Assert(t, !run, "should not have run")
+	q.Resume()
+	time.Sleep(20 * time.Millisecond)
+	Assert(t, run, "should have run")
 }
