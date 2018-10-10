@@ -6,14 +6,15 @@ Job queue for Go.
 
 Available behaviours:
 
-- Specify how many worker processes should perform jobs
 - Run jobs with a delay
 - Repeat (loop) jobs after a delay
 - Debounce jobs
 - Prevent jobs from running simultaneously
 - Prevent conflicts between different jobs
+- Replace jobs with other jobs
 - Cancel jobs that haven't run yet
 - Run jobs inline
+- Pause/resume processing
 
 ### Example
 
@@ -21,23 +22,24 @@ Available behaviours:
 package main
 
 import (
-	"github.com/hx/queue"
-	"fmt"
-	"time"
+    "fmt"
+    "github.com/hx/queue"
+    "time"
 )
 
-q := queue.NewQueue()
-
-func sayHello() {
-	q.Add(&queue.Job{
-		Key:     "hello",
-		Delay:   10 * time.Millisecond,
-		Perform: func() { fmt.Println("Hello!") },
-	})
+func sayHello() *queue.Job {
+    return &queue.Job{
+        Key:     "hello",
+        Delay:   10 * time.Millisecond,
+        Perform: func() { fmt.Println("Hello!") },
+    }
 }
 
-sayHello() // Schedule a job
-sayHello() // Replaces the first job
+func main() {
+    q := new(queue.Queue)
+    q.Add(sayHello()) // Schedule a job
+    q.Add(sayHello()) // Replaces the first job
+}
 
 // => "Hello!"
 ```
