@@ -40,3 +40,13 @@ func (h *jobHeap) remove(key string) bool {
 func (h *jobHeap) wait() {
 	h.wg.Wait()
 }
+
+func (h *jobHeap) clear() (cancelled []*Job) {
+	if len(h.jobs) == 0 {
+		return
+	}
+	cancelled = h.jobs
+	h.jobs = []*Job{}
+	h.wg.Add(-len(cancelled))
+	return
+}
