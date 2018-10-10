@@ -35,8 +35,7 @@ func TestQueue_Inline(t *testing.T) {
 
 func TestQueue_Add(t *testing.T) {
 	run := false
-	(&queue.Queue{}).
-		Work(1).
+	new(queue.Queue).
 		AddFunc("", func() { run = true }).
 		WaitAll()
 	Assert(t, run, "Job should have run")
@@ -44,8 +43,7 @@ func TestQueue_Add(t *testing.T) {
 
 func TestQueue_RunDelayed(t *testing.T) {
 	seq := ""
-	(&queue.Queue{}).
-		Work(1).
+	new(queue.Queue).
 		Add(&queue.Job{Key: "a", Perform: func() { seq = seq + "a" }, Delay: 40 * time.Millisecond}).
 		Add(&queue.Job{Key: "b", Perform: func() { seq = seq + "b" }, Delay: 20 * time.Millisecond}).
 		Add(&queue.Job{Key: "c", Perform: func() { seq = seq + "c" }, Delay: 60 * time.Millisecond}).
@@ -55,8 +53,7 @@ func TestQueue_RunDelayed(t *testing.T) {
 
 func TestQueue_Override(t *testing.T) {
 	seq := ""
-	(&queue.Queue{}).
-		Work(1).
+	new(queue.Queue).
 		Add(&queue.Job{Key: "a", Perform: func() { seq = seq + "a" }, Delay: 40 * time.Millisecond}).
 		Add(&queue.Job{Key: "a", Perform: func() { seq = seq + "b" }, Delay: 20 * time.Millisecond}).
 		WaitAll()
@@ -67,29 +64,30 @@ func TestQueue_AutoKey(t *testing.T) {
 	j1 := queue.Job{Perform: func() {}}
 	j2 := queue.Job{Perform: func() {}}
 	Equal(t, j1.Key, j2.Key)
-	queue.NewQueue().Add(&j1).Add(&j2)
+	new(queue.Queue).Add(&j1).Add(&j2)
 	NotEqual(t, j1.Key, j2.Key)
 }
 
 func TestQueue_Wait(t *testing.T) {
-	q := queue.NewQueue()
+	q := new(queue.Queue)
 	q.Wait()
 	q.WaitAll()
-	q.StopAll().WaitAll()
 }
 
 func TestQueue_Repetition(t *testing.T) {
-	count := 0
-	done := make(chan struct{})
-	q := queue.NewQueue()
+	var (
+		count = 0
+		done  = make(chan struct{})
+		q     = new(queue.Queue)
+	)
 	q.Add(&queue.Job{Repeat: 10 * time.Millisecond, Perform: func() {
 		count++
 		if count == 4 {
-			q.StopAll()
 			done <- struct{}{}
 		}
 	}})
 	<-done
+	q.Shutdown()
 	Equal(t, 4, count)
 }
 
@@ -100,7 +98,7 @@ func TestQueue_Debounce(t *testing.T) {
 		Perform: func() { count++ },
 		Delay:   10 * time.Millisecond,
 	}
-	q := queue.NewQueue()
+	q := new(queue.Queue)
 	q.Add(job)
 	time.Sleep(2 * time.Millisecond)
 	q.Add(job)
@@ -119,7 +117,6 @@ func TestQueue_OnPanic(t *testing.T) {
 			caught = err
 		},
 	}).
-		Work(1).
 		AddFunc("", func() { panic("abc") }).
 		WaitAll()
 	Equal(t, "abc", caught)
@@ -129,7 +126,7 @@ func TestQueue_Exclusive(t *testing.T) {
 	var (
 		seq  = ""
 		lock = sync.Mutex{}
-		q    = queue.NewQueue().Work(3)
+		q    = new(queue.Queue)
 		add  = func(s string) {
 			lock.Lock()
 			seq += s
@@ -155,7 +152,7 @@ func TestQueue_Exclusive(t *testing.T) {
 }
 
 func TestQueue_Conflicts(t *testing.T) {
-	q := queue.NewQueue().Work(3)
+	q := new(queue.Queue)
 	count := 0
 	q.Add(&queue.Job{
 		HasConflicts:      func(_ []string) bool { return true },
@@ -182,8 +179,7 @@ func TestQueue_Conflict(t *testing.T) {
 		count  = 0
 		tested []string
 	)
-	queue.
-		NewQueue().
+	new(queue.Queue).
 		Add(&queue.Job{
 			Key: "thorn",
 			Perform: func() {
@@ -205,7 +201,7 @@ func TestQueue_Conflict(t *testing.T) {
 }
 
 func TestQueue_Remove(t *testing.T) {
-	q := queue.NewQueue().Add(&queue.Job{
+	q := new(queue.Queue).Add(&queue.Job{
 		Key:     "fail",
 		Delay:   50 * time.Millisecond,
 		Perform: func() { t.FailNow() },
@@ -224,9 +220,7 @@ func TestQueue_CanReplace(t *testing.T) {
 			lock.Unlock()
 		}
 	)
-	queue.
-		NewQueue().
-		Work(3).
+	new(queue.Queue).
 		Add(&queue.Job{
 			Key:     "a",
 			Delay:   10 * time.Millisecond,
@@ -248,7 +242,7 @@ func TestQueue_CanReplace(t *testing.T) {
 }
 
 func TestQueue_Clear(t *testing.T) {
-	q := (&queue.Queue{}).Pause()
+	q := new(queue.Queue).Pause()
 	q.
 		AddFunc("foo", func() {}).
 		AddFunc("baz", func() {}).
@@ -283,7 +277,7 @@ func TestQueue_Force(t *testing.T) {
 func TestQueue_Drain(t *testing.T) {
 	var (
 		count int
-		q     = (&queue.Queue{}).Pause()
+		q     = new(queue.Queue).Pause()
 		inc   = func() { count += 1 }
 	)
 	q.AddFunc("a", inc).AddFunc("b", inc).AddFunc("c", inc)
@@ -295,7 +289,7 @@ func TestQueue_Drain(t *testing.T) {
 
 func TestQueue_Waiting(t *testing.T) {
 	var (
-		q = (&queue.Queue{}).Pause()
+		q = new(queue.Queue).Pause()
 		j = &queue.Job{Key: "123", Perform: func() {}}
 	)
 	q.Add(j)
@@ -305,7 +299,7 @@ func TestQueue_Waiting(t *testing.T) {
 }
 
 func TestQueue_ForcedJobQueuesAnotherJob(t *testing.T) {
-	q := &queue.Queue{}
+	q := new(queue.Queue)
 	q.AddFunc("outer", func() {
 		q.AddFunc("inner", func() {})
 	})

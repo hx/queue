@@ -33,16 +33,6 @@ const (
 	statePaused
 )
 
-// Deprecated: make a new queue. Use &Queue{} instead.
-func NewQueue() *Queue {
-	return &Queue{}
-}
-
-// Deprecated: used to set number of workers. No-op.
-func (q *Queue) Work(workers int) *Queue {
-	return q
-}
-
 // Wait for running jobs to complete. Does not wait for delayed jobs.
 func (q *Queue) Wait() *Queue {
 	if q.didStart() {
@@ -57,11 +47,6 @@ func (q *Queue) WaitAll() *Queue {
 		q.waiting.wait()
 	}
 	return q.Wait()
-}
-
-// Deprecated: used to stop all running workers. No-op.
-func (q *Queue) StopAll() *Queue {
-	return q.Work(0)
 }
 
 // Clear the queue, and wait for existing jobs to finish. Repeat jobs will not be repeated.
