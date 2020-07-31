@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -12,8 +13,8 @@ type Queue struct {
 	// When true, all jobs will be run once, and immediately. Delay and Repeat properties are ignored.
 	Inline bool
 
-	// Function to be called when a job panics. Ignored on inline queues. If absent, panicking jobs will fail silently.
-	OnPanic func(*Job, interface{})
+	// Function to be called when a job panics. Ignored on inline queues. If absent, panicking jobs will crash the queue.
+	OnPanic func(*Panic)
 
 	sync    sync.Mutex
 	state   uint32
@@ -62,7 +63,7 @@ func (q *Queue) Shutdown() *Queue {
 // Add a job to the queue.
 func (q *Queue) Add(j *Job) *Queue {
 	if q.Inline {
-		q.performInline(j)
+		q.perform(j, true)
 	} else {
 		q.interruptAndWait(func() { q.enqueue(j) })
 	}
@@ -215,7 +216,7 @@ func (q *Queue) run() {
 						unqueue = append(unqueue, job)
 						q.running[job.Key]++
 						q.active.Add(1)
-						go q.perform(job)
+						go q.perform(job, false)
 					}
 				}
 			}
@@ -281,10 +282,19 @@ func (q *Queue) enqueue(j *Job) {
 	q.waiting.add(j)
 }
 
-func (q *Queue) perform(j *Job) {
+func (q *Queue) perform(j *Job, inline bool) {
 	defer func() {
-		if err := recover(); err != nil && q.OnPanic != nil {
-			q.OnPanic(j, err)
+		if q.OnPanic != nil {
+			if err := recover(); err != nil {
+				q.OnPanic(&Panic{
+					Job:            j,
+					Error:          err,
+					FormattedStack: debug.Stack(),
+				})
+			}
+		}
+		if inline {
+			return
 		}
 		q.interrupt(func() {
 			if count := q.running[j.Key] - 1; count == 0 {
@@ -298,15 +308,6 @@ func (q *Queue) perform(j *Job) {
 			}
 			q.active.Done()
 		})
-	}()
-	j.Perform()
-}
-
-func (q *Queue) performInline(j *Job) {
-	defer func() {
-		if err := recover(); err != nil && q.OnPanic != nil {
-			q.OnPanic(j, err)
-		}
 	}()
 	j.Perform()
 }

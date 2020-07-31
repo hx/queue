@@ -1,6 +1,7 @@
 package queue_test
 
 import (
+	"bytes"
 	"github.com/hx/queue"
 	"reflect"
 	"sync"
@@ -111,15 +112,16 @@ func TestQueue_Debounce(t *testing.T) {
 }
 
 func TestQueue_OnPanic(t *testing.T) {
-	var caught interface{}
+	var actual *queue.Panic
 	(&queue.Queue{
-		OnPanic: func(j *queue.Job, err interface{}) {
-			caught = err
-		},
+		OnPanic: func(p *queue.Panic) { actual = p },
 	}).
 		AddFunc("", func() { panic("abc") }).
 		WaitAll()
-	Equal(t, "abc", caught)
+	Equal(t, "Anonymous job #1", actual.Job.Key)
+	Equal(t, "abc", actual.Error)
+	Assert(t, bytes.Contains(actual.FormattedStack, []byte("TestQueue_OnPanic")),
+		"Stack should include the calling test function")
 }
 
 func TestQueue_Exclusive(t *testing.T) {
